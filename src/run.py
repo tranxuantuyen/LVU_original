@@ -1979,11 +1979,8 @@ def main():
         if args.local_rank == 0:
             torch.distributed.barrier()
 
-        global_step, tr_loss, len_train_dataloader = train(args, train_dataset, model)
+        global_step, tr_loss = train(args, train_dataset, model)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
-        print("global_step:", global_step)
-        print("len_train_dataloader", len_train_dataloader)
-
     if args.is_end_task and args.local_rank in [-1, 0]:
         evaluate(args, model)
     wandb.finish()
