@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=5
 
 export TRAIN_FILE=/home/s222126678/Documents/lvu_trans/data/ava/train.csv
 export TEST_FILE=/home/s222126678/Documents/lvu_trans/data/ava/val.csv

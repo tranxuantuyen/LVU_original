@@ -360,7 +360,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
 
         """
         assert inc_position_ids is not None
-        attention_mask = inc_position_ids != 1
+        attention_mask = inc_position_ids != 1 # phan tu == 1 (return 0) se bi mask
 
 
         outputs = self.roberta(
