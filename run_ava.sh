@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=2
 
 export TRAIN_FILE=/home/s222126678/Documents/lvu_trans/data/ava/train.csv
 export TEST_FILE=/home/s222126678/Documents/lvu_trans/data/ava/val.csv
@@ -11,7 +11,7 @@ exp=`date +"%Y%m%d_%H%M%S"`_ava
 
 
 short_term_model_weights=/home/s222126678/Documents/lvu_trans/data/ava/SLOWFAST_32x2_R101_50_50.pkl
-pretrained_weights=/home/s222126678/Documents/lvu_trans/pretrained_models/pretrained_for_ava.bin
+# pretrained_weights=/home/s222126678/Documents/lvu_trans/pretrained_models/pretrained_for_ava.bin
 
 
 python -u src/run.py \
@@ -44,8 +44,8 @@ python -u src/run.py \
     --train_long_term_dropout \
     --per_gpu_eval_batch_size 32 \
     --short_term_model_weights ${short_term_model_weights} \
-    --force_load_checkpoint ${pretrained_weights} \
     >> logs/${exp}.log 2>&1
+    # --force_load_checkpoint ${pretrained_weights} \
 
 
 

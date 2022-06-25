@@ -205,14 +205,14 @@ class VideoDataset(Dataset):
         print(len(self.videos), "video data loaded in total")
 
     def __len__(self):
-        if self.args.is_end_task and not self.evaluate:
-            return len(set([x[0] for x in self.spans])) * int(
-                self.args.num_train_epochs
-            )
-        if self.force_len is not None:
-            return self.force_len
-        if self.args.same_movie:
-            return sum([len(x) for x in self.spans.values()])
+        # if self.args.is_end_task and not self.evaluate:
+        #     return len(set([x[0] for x in self.spans])) * int(
+        #         self.args.num_train_epochs
+        #     )
+        # if self.force_len is not None:
+        #     return self.force_len
+        # if self.args.same_movie:
+        #     return sum([len(x) for x in self.spans.values()])
 
         return len(self.spans)
 
@@ -225,10 +225,9 @@ class VideoDataset(Dataset):
                 positive_id = random.choice(list(self.spans.keys()))
             selected = [random.choice(self.spans[positive_id]) for _ in range(2)]
         else:
-            if self.evaluate:
-                selected = [self.spans[item % len(self.spans)]]
-            else:
-                selected = [random.choice(self.spans)]
+            selected = [self.spans[item % len(self.spans)]]
+            # else:
+            #     selected = [random.choice(self.spans)]
 
         ret = []
         construct_func = self.construct_example
@@ -776,45 +775,44 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
             args.short_term_model_weights,
             map_location="cpu",
         )
-        tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
-            state_dict["model_state"]["head.projection.weight"]
-        )
-        tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
-            state_dict["model_state"]["head.projection.bias"]
-        )
+        # tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
+        #     state_dict["model_state"]["head.projection.weight"]
+        # )
+        # tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
+        #     state_dict["model_state"]["head.projection.bias"]
+        # )
+        # pretrained_state_dict = torch.load(
+        #     args.force_load_checkpoint, map_location="cpu"
+        # )
 
-        pretrained_state_dict = torch.load(
-            args.force_load_checkpoint, map_location="cpu"
-        )
+        # tmp_weight = pretrained_state_dict["action_lm_head.decoder.weight"]
+        # if tmp_model.action_lm_head.decoder.weight.shape == tmp_weight.shape:
+        #     logger.warn("init pretrained weights")
+        #     tmp_model.action_lm_head.decoder.weight = nn.Parameter(tmp_weight)
+        #     tmp_bias = pretrained_state_dict["action_lm_head.decoder.bias"]
+        #     tmp_model.action_lm_head.bias = nn.Parameter(tmp_bias)
+        #     tmp_model.action_lm_head.decoder.bias = tmp_model.action_lm_head.bias
+        # else:
+        #     logger.warn(
+        #         "Not init pretrained weights {} {} not match".format(
+        #             tmp_model.action_lm_head.decoder.weight.shape, tmp_weight.shape
+        #         )
+        #     )
 
-        tmp_weight = pretrained_state_dict["action_lm_head.decoder.weight"]
-        if tmp_model.action_lm_head.decoder.weight.shape == tmp_weight.shape:
-            logger.warn("init pretrained weights")
-            tmp_model.action_lm_head.decoder.weight = nn.Parameter(tmp_weight)
-            tmp_bias = pretrained_state_dict["action_lm_head.decoder.bias"]
-            tmp_model.action_lm_head.bias = nn.Parameter(tmp_bias)
-            tmp_model.action_lm_head.decoder.bias = tmp_model.action_lm_head.bias
-        else:
-            logger.warn(
-                "Not init pretrained weights {} {} not match".format(
-                    tmp_model.action_lm_head.decoder.weight.shape, tmp_weight.shape
-                )
-            )
-
-    if args.action_recognition:
-        freeze(tmp_model.roberta)
-        if hasattr(tmp_model, "lm_head"):
-            freeze(tmp_model.lm_head.dense)
-        if hasattr(tmp_model, "action_lm_head"):
-            freeze(tmp_model.action_lm_head.dense)
-        if hasattr(tmp_model, "lm_head"):
-            freeze(tmp_model.lm_head.layer_norm)
-        if hasattr(tmp_model, "action_lm_head"):
-            freeze(tmp_model.action_lm_head.layer_norm)
+    # if args.action_recognition:
+    #     freeze(tmp_model.roberta)
+    #     if hasattr(tmp_model, "lm_head"):
+    #         freeze(tmp_model.lm_head.dense)
+    #     if hasattr(tmp_model, "action_lm_head"):
+    #         freeze(tmp_model.action_lm_head.dense)
+    #     if hasattr(tmp_model, "lm_head"):
+    #         freeze(tmp_model.lm_head.layer_norm)
+    #     if hasattr(tmp_model, "action_lm_head"):
+    #         freeze(tmp_model.action_lm_head.layer_norm)
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
-
+    model.init_weights()
     rbt_no_d = []
     final_no_d = []
     rbt_d = []
@@ -1842,7 +1840,6 @@ def main():
 
     parser.add_argument("--debug", action="store_true", help="")
     parser.add_argument("--use_good_quality", action="store_true", help="")
-
     args = parser.parse_args()
 
     args.is_end_task = args.train_long_term or args.action_recognition
