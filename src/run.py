@@ -775,12 +775,12 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
             args.short_term_model_weights,
             map_location="cpu",
         )
-        # tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
-        #     state_dict["model_state"]["head.projection.weight"]
-        # )
-        # tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
-        #     state_dict["model_state"]["head.projection.bias"]
-        # )
+        tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
+            state_dict["model_state"]["head.projection.weight"]
+        )
+        tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
+            state_dict["model_state"]["head.projection.bias"]
+        )
         # pretrained_state_dict = torch.load(
         #     args.force_load_checkpoint, map_location="cpu"
         # )

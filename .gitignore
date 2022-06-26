@@ -2,3 +2,4 @@ logs
 wandb
 outputs
 *.csv
+src/models/__pycache__

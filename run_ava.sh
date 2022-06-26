@@ -44,6 +44,9 @@ python -u src/run.py \
     --train_long_term_dropout \
     --per_gpu_eval_batch_size 32 \
     --short_term_model_weights ${short_term_model_weights} \
+    --no_pos_ids \
+    --no_scene_ids \
+    --no_link_ids \
     >> logs/${exp}.log 2>&1
     # --force_load_checkpoint ${pretrained_weights} \
 
