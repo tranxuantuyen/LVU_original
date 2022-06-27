@@ -33,10 +33,8 @@ import pickle
 import random
 import re
 import shutil
-import pdb
 from typing import Dict, List, Tuple
 import time
-import hashlib
 
 import numpy as np
 import torch
@@ -45,7 +43,6 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from sklearn.metrics import average_precision_score
 import wandb
 
 wandb.init(project="LVU original code", name="First AVA fine tune")
@@ -115,69 +112,40 @@ class VideoDataset(Dataset):
             args.eval_feature_file if evaluate else args.train_feature_file,
             args,
         )
-
-        if args.action_recognition:
-            self.videos = video_data_helper.load_video_data(
-                args.eval_data_file if evaluate else args.train_data_file,
-                args,
-            )
-        elif args.train_long_term:
-            (
-                self.videos,
-                self.val_set,
-                self.test_set,
-            ) = video_data_helper.load_mc_video_data(args, evaluate)
-        else:
-            if evaluate:
-                self.videos = video_data_helper.load_video_data(
-                    args.eval_data_file if evaluate else args.train_data_file,
-                    args,
-                )
-            else:
-                (
-                    self.videos,
-                    self.val_set,
-                    self.test_set,
-                ) = video_data_helper.load_mc_video_data(args, evaluate)
+        self.videos = video_data_helper.load_video_data(
+            args.eval_data_file if evaluate else args.train_data_file,
+            args,
+        )
         self.args = args
-
         self.spans = []
-        if args.action_recognition:
-            for video_name in self.videos.keys():
-                v = self.videos[video_name]
-                # for action recognition only, both train and test use 15 min only.
-                for center_sec in range(EVAL_START_SEC, EVAL_END_SEC):
-                    if (
-                        sum(
-                            [
-                                sec in v.keys()
-                                for sec in range(
-                                    center_sec - self.secs_per_example // 2,
-                                    center_sec + self.secs_per_example // 2,
-                                )
-                            ]
-                        )
-                        > 0
-                    ):
-                        self.spans.append((video_name, center_sec, None))
-            if evaluate:
-                self.spans = self.spans * args.eval_sample_x
+        for video_name in self.videos.keys():
+            v = self.videos[video_name]
+            # for action recognition only, both train and test use 15 min only.
+            for center_sec in range(EVAL_START_SEC, EVAL_END_SEC):
+                if (
+                    sum(
+                        [
+                            sec in v.keys()
+                            for sec in range(
+                                center_sec - self.secs_per_example // 2,
+                                center_sec + self.secs_per_example // 2,
+                            )
+                        ]
+                    )
+                    > 0
+                ):
+                    self.spans.append((video_name, center_sec, None))
+        if evaluate:
+            self.spans = self.spans * args.eval_sample_x
 
-        if args.same_movie:
-            self.spans = {}
         for video_name in self.videos.keys():
 
             v = self.videos[video_name]
-
-            if args.same_movie:
-                positive_id = video_name
-
             # complete spans
             range_start = min(v.keys()) + self.secs_per_example - 1
             range_end = max(v.keys()) + 1
             gap = 60 if (self.evaluate and not args.is_end_task) else 1
 
-            found_long_span = False
             for tail_sec in range(range_start, range_end, gap):
                 if (
                     sum(
@@ -190,45 +158,25 @@ class VideoDataset(Dataset):
                     )
                     > 0
                 ):
-                    if args.same_movie:
-                        if positive_id not in self.spans:
-                            self.spans[positive_id] = []
-                        self.spans[positive_id].append((video_name, None, tail_sec))
-                    else:
-                        self.spans.append((video_name, None, tail_sec))
-                        found_long_span = True
-            if not found_long_span and args.train_long_term:
-                self.spans.append((video_name, None, range_end - 1))
 
-        self.force_len = None
+                    self.spans.append((video_name, None, tail_sec))
+
         print(len(set([x[0] for x in self.spans])), "videos in spans in total")
         print(len(self.videos), "video data loaded in total")
 
     def __len__(self):
-        if self.args.is_end_task and not self.evaluate:
+        if self.evaluate:
+            return len(self.spans)
+        else:
             return len(set([x[0] for x in self.spans])) * int(
                 self.args.num_train_epochs
             )
-        if self.force_len is not None:
-            return self.force_len
-        if self.args.same_movie:
-            return sum([len(x) for x in self.spans.values()])
-
-        return len(self.spans)
 
     def __getitem__(self, item):
-
-        if self.args.same_movie:
-            if self.evaluate:
-                positive_id = list(self.spans.keys())[item % len(self.spans.keys())]
-            else:
-                positive_id = random.choice(list(self.spans.keys()))
-            selected = [random.choice(self.spans[positive_id]) for _ in range(2)]
+        if self.evaluate:
+            selected = [self.spans[item % len(self.spans)]]
         else:
-            if self.evaluate:
-                selected = [self.spans[item % len(self.spans)]]
-            else:
-                selected = [random.choice(self.spans)]
+            selected = [random.choice(self.spans)]
 
         ret = []
         construct_func = self.construct_example
@@ -263,22 +211,11 @@ class VideoDataset(Dataset):
 
         args = self.args
 
-        is_pretrain = (not args.action_recognition) and (not args.train_long_term)
-        is_mc = not args.action_recognition and not (is_pretrain and self.evaluate)
-
         video = self.videos[video_name]
 
-        if is_mc:
-            video_features = np.load(
-                os.path.join(args.mc_train_feature_file, video_name + ".npz"),
-                allow_pickle=True,
-            )["a"].item()
-        else:
-            video_features = (
-                self.all_features[video_name]
-                if (self.all_features is not None)
-                else None
-            )
+        video_features = (
+            self.all_features[video_name] if (self.all_features is not None) else None
+        )
 
         ex_link_ids = []
         ex_scene_ids = []
@@ -289,7 +226,6 @@ class VideoDataset(Dataset):
         ex_features = []
         ex_spatial = []
 
-        all_tube_exs = {}
         for shift_idx, sec_shift in enumerate(range(self.secs_per_example)):
 
             if center_start is not None:
@@ -310,17 +246,9 @@ class VideoDataset(Dataset):
                         ex_secs.append(auged_sec)
                         ex_scene_ids.append(scene_id)
                         ex_boxes.append(box)
-                        if args.action_recognition:
-                            ex_actions.append(binarize(actions))
-                        if args.train_long_term:
-                            before_action = actions
-
-                            ex_long_term.append(actions)
+                        ex_actions.append(binarize(actions))
 
                         cur_feat = video_features[sec][box]
-                        cur_mc_feat_ava = None
-                        if is_mc:
-                            cur_mc_feat_ava = cur_feat
 
                         ex_features.append(cur_feat)
 
@@ -362,15 +290,9 @@ class VideoDataset(Dataset):
         )
         ex_link_ids = [rand_link_ids[x] + 2 for x in ex_link_ids]
 
-        if args.action_recognition:
-            ex_actions = [binarize([])] + ex_actions + [binarize([])]
-        else:
-            ex_actions = []
+        ex_actions = [binarize([])] + ex_actions + [binarize([])]
 
-        if args.train_long_term:
-            ex_long_term = [-1] + ex_long_term + [-1]
-        else:
-            ex_long_term = []
+        ex_long_term = []
 
         ex_link_ids = [0] + ex_link_ids + [1]  # end doens't belong to a link
 
