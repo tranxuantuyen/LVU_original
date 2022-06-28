@@ -98,10 +98,6 @@ proj_W = None
 proj_b = None
 
 
-def proj(x):
-    return torch.matmul(x, proj_W) + proj_b
-
-
 class VideoDataset(Dataset):
     def __init__(self, args, evaluate):
 
@@ -461,7 +457,6 @@ def mask_tokens(
     link_batch: torch.Tensor,
     inc_scene_batch: torch.Tensor,
     action_batch: torch.Tensor,
-    soft_label_batch: torch.Tensor,
     inputs_embed_batch: torch.Tensor,
     center_pos_batch: torch.Tensor,
     args,
@@ -489,11 +484,6 @@ def mask_tokens(
         action_batch[
             ~out_masked_indices[:, :, None].expand(-1, -1, args.num_action_classes)
         ] = -100  # We only compute loss on masked tokens
-
-    if args.use_soft_labels:
-        soft_label_batch[
-            ~out_masked_indices[:, :, None].expand(-1, -1, args.soft_label_dim)
-        ] = -100
 
     # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
     indices_replaced = (
@@ -524,7 +514,7 @@ def mask_tokens(
         masked_indices, inputs_embed_batch[:, :, : args.action_feat_dim], contents
     )
     # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-    return (action_batch, inputs_embed_batch, soft_label_batch, masked_indices)
+    return (action_batch, inputs_embed_batch, masked_indices)
 
 
 def shared_collate(all_examples: List[torch.Tensor]):
@@ -564,34 +554,18 @@ def prepare_model_input(
 ):
 
     inputs_embed_batch = pad_feature_batch(feature_batch, args.device)
-    soft_label_batch = proj(inputs_embed_batch) if args.use_soft_labels else None
 
     spatial_batch = pad_feature_batch(spatial_batch, args.device)
 
-    if args.action_recognition:
-        outputs_embed_batch = inputs_embed_batch.clone().detach()
-    else:
-        outputs_embed_batch = None
-
-    if args.mask_sep:
-        start = 0
-        for cur_feat_dim in args.all_feat_dims:
-            if cur_feat_dim == 2304:
-                pass
-            else:
-                assert False
-            start += cur_feat_dim
-
+    outputs_embed_batch = inputs_embed_batch.clone().detach()
     (
         action_batch,
         inputs_embed_batch,
-        soft_label_batch,
         target_locations,
     ) = mask_tokens(
         link_batch,
         inc_scene_batch,
         action_batch,
-        soft_label_batch,
         inputs_embed_batch,
         center_pos_batch,
         args,
@@ -626,7 +600,6 @@ def prepare_model_input(
         inputs_embed_batch,
         outputs_embed_batch,
         spatial_batch,
-        soft_label_batch,
         target_locations,
     )
 
@@ -971,7 +944,6 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                 inputs_embed_batch,
                 outputs_embed_batch,
                 spatial_batch,
-                soft_label_batch,
                 target_locations,
             ) = prepare_model_input(
                 link_batch,
@@ -1003,7 +975,6 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                 inputs_embeds=inputs_embed_batch,
                 outputs_embeds=outputs_embed_batch,
                 spatial_codes=spatial_batch,
-                soft_labels=soft_label_batch,
                 target_locations=target_locations,
                 secs=sec_batch,
                 boxes=box_batch,
@@ -1317,7 +1288,6 @@ def evaluate(args, model: PreTrainedModel, prefix="") -> Dict:
             inputs_embed_batch,
             outputs_embed_batch,
             spatial_batch,
-            soft_label_batch,
             target_locations,
         ) = prepare_model_input(
             link_batch,
@@ -1349,7 +1319,6 @@ def evaluate(args, model: PreTrainedModel, prefix="") -> Dict:
                 inputs_embeds=inputs_embed_batch,
                 outputs_embeds=outputs_embed_batch,
                 spatial_codes=spatial_batch,
-                soft_labels=soft_label_batch,
                 target_locations=target_locations,
                 secs=sec_batch,
                 boxes=box_batch,
