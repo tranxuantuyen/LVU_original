@@ -43,9 +43,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-import wandb
 
-wandb.init(project="LVU original code", name="First AVA fine tune")
 from models import (
     WEIGHTS_NAME,
     AdamW,
@@ -1109,23 +1107,9 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                     logger.info(
                         "Saving optimizer and scheduler states to %s", output_dir
                     )
-            wandb.log(
-                {
-                    "loss_batch": loss,
-                    "tr_loss_batch": tr_loss,
-                    "global_step_batch": global_step,
-                }
-            )
+
             epoch_len = len(train_dataloader) // int(args.num_train_epochs)
-            if (step + 1) % epoch_len == 0:
-                wandb.log(
-                    {
-                        "loss_epoch": loss,
-                        "tr_loss_epoch": tr_loss,
-                        "global_step_epoch": global_step,
-                        "step": step,
-                    }
-                )
+
 
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
@@ -1325,7 +1309,6 @@ def evaluate(args, model: PreTrainedModel, prefix="") -> Dict:
                 args=args,
             )
             losses = outputs[0]
-            # wandb.log({"eval loss": losses})
             if args.action_recognition:
                 all_preds.append(
                     (
@@ -1832,7 +1815,6 @@ def main():
     else:
         logger.info("Training new model from scratch")
         model = model_class(config=config)
-    wandb.config = config
     model.to(args.device)
 
     if args.local_rank == 0:
@@ -1874,7 +1856,6 @@ def main():
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
     if args.is_end_task and args.local_rank in [-1, 0]:
         evaluate(args, model)
-    wandb.finish()
 
 
 if __name__ == "__main__":

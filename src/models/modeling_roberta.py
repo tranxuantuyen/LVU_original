@@ -199,18 +199,6 @@ class RobertaModel(BertModel):
         self.embeddings.word_embeddings = value
 
 
-class BertPooler2(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.activation = nn.Tanh()
-
-    def forward(self, hidden_states):
-        pooled_output = self.dense(hidden_states)
-        pooled_output = self.activation(pooled_output)
-        return pooled_output
-
-
 bce_with_logits_loss = BCEWithLogitsLoss()
 
 
@@ -228,7 +216,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
     pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
     base_model_prefix = "roberta"
 
-    def __init__(self, config, args):
+    def __init__(self, config, args):  ###############   STT-1 #########
         super().__init__(config)
         self.args = args
 
@@ -254,6 +242,8 @@ class RobertaForMaskedLM(BertPreTrainedModel):
         logger.warn("Setting config.feat_dim to {}".format(config.feat_dim))
         logger.warn("Setting config.vocab_size to {}".format(config.vocab_size))
         logger.warn("+" * 10)
+
+        ###############   STT-2 #########
         self.roberta = RobertaModel(config, args=args)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
@@ -266,7 +256,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
     def get_output_embeddings(self):
         return self.lm_head.decoder
 
-    def forward(
+    def forward(  ###############   STT-2 #########
         self,
         inc_scene_ids=None,
         dec_scene_ids=None,
@@ -327,7 +317,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
         assert inc_position_ids is not None
         attention_mask = inc_position_ids != 1
 
-        outputs = self.roberta(
+        outputs = self.roberta(  ###############   STT-2 #########
             inc_scene_ids=inc_scene_ids,
             dec_scene_ids=dec_scene_ids,
             center_scene_ids=center_scene_ids,
@@ -341,7 +331,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
             inputs_embeds=inputs_embeds,
             spatial_codes=spatial_codes,
         )
-        sequence_output, pooler_output = outputs[0], outputs[1]
+        sequence_output = outputs[0]
 
         all_loss = {}
         all_outputs = {}
@@ -358,57 +348,11 @@ class RobertaForMaskedLM(BertPreTrainedModel):
             action_labels.view(-1, self.args.num_action_classes),
         )
         all_loss["action"] = masked_lm_loss
-        outputs = (all_outputs,) + outputs[
-            2:
-        ]  # Add hidden states and attention if they are here
-        outputs = (all_loss,) + outputs
-        return outputs  # (masked_lm_loss), prediction_scores, (hidden_states), (attentions)
-
-
-same_movie_criterion = nn.CrossEntropyLoss().cuda()
-
-
-class SameMovieHeadLoss(nn.Module):
-    """Roberta Head for masked language modeling."""
-
-    def __init__(self, config, temperature):
-        super().__init__()
-        # Treat this as g, which will be removed!
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.layer_norm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.decoder = nn.Linear(config.hidden_size, 128)
-        self.T = temperature
-
-    def forward(self, x):
-        x = self.dense(x)
-        x = gelu(x)
-        x = self.layer_norm(x)
-        x = self.decoder(x)  # 128
-        ###########################
-        # Loss start
-        N = x.shape[0]
-
-        l_pos = torch.einsum("nc,nc->n", [x[: N // 2], x[N // 2 :]]).unsqueeze(
-            -1
-        )  # (N//2, 1)
-        l_pos = torch.cat([l_pos, l_pos], dim=0)  # (N, 1)
-
-        l_neg = []
-        for i in range(N):
-            neg_idx = [
-                (j != i and j != i + N // 2 and j != i - N // 2) for j in range(N)
-            ]
-            l_neg.append(
-                torch.einsum("k,nk->n", [x[i], x[neg_idx]])
-            )  # (c), (N-2, c) -> (N-2, )
-        l_neg = torch.stack(l_neg, 0)  # -> (N, N-2)
-        logits = torch.cat([l_pos, l_neg], dim=1)
-        # apply temperature
-        logits /= self.T
-
-        # labels: positive key indicators
-        labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
-        return same_movie_criterion(logits, labels)
+        outputs = (
+            all_loss,
+            all_outputs,
+        )
+        return outputs
 
 
 class ActionRecognitionHead(nn.Module):
@@ -439,45 +383,3 @@ class ActionRecognitionHead(nn.Module):
             x = x + self.decoder_feat(features_2)
 
         return x
-
-
-class RobertaLMHead(nn.Module):
-    """Roberta Head for masked language modeling."""
-
-    def __init__(self, config, in_dim, out_size):
-        super().__init__()
-        self.dense = nn.Linear(in_dim, config.hidden_size)
-        self.layer_norm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-
-        if out_size == -1:
-            out_size = 1
-        self.decoder = nn.Linear(config.hidden_size, out_size, bias=False)
-        self.bias = nn.Parameter(torch.zeros(out_size))
-
-        # Need a link between the two variables so that the bias is correctly resized with `resize_token_embeddings`
-        self.decoder.bias = self.bias
-
-    def forward(self, features):
-        x = self.dense(features)
-        x = gelu(x)
-        z = self.layer_norm(x)
-
-        # project back to size of vocabulary with bias
-        x = self.decoder(z) + self.bias
-
-        return x, z
-
-
-class RobertaLinearHead(nn.Module):
-    """Roberta Head for masked language modeling."""
-
-    def __init__(self, config, in_dim, out_size):
-        super().__init__()
-        if out_size == -1:
-            out_size = 1
-
-        self.dense = nn.Linear(in_dim, out_size)
-
-    def forward(self, features):
-        x = self.dense(features)
-        return x, x
