@@ -378,8 +378,8 @@ class ActionRecognitionHead(nn.Module):
         x = self.layer_norm(x)
         x = self.decoder(x)
 
-        if features_2 is not None:
-            # project back to size of vocabulary with bias
-            x = x + self.decoder_feat(features_2)
+        # if features_2 is not None:
+        #     # project back to size of vocabulary with bias
+        #     x = x + self.decoder_feat(features_2)
 
         return x

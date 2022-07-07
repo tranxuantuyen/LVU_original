@@ -428,7 +428,7 @@ def perform_masking(masked_indices, inputs_embed_batch, contents):
         (indices_replaced.shape[0], indices_replaced.shape[1], 1)
     ).expand(-1, -1, mask_dim)
 
-    inputs_embed_batch[feat_mask] = -10
+    # inputs_embed_batch[feat_mask] = -10
 
     # 10% of the time, we replace masked input tokens with random word
     indices_random = (
@@ -556,11 +556,7 @@ def prepare_model_input(
     spatial_batch = pad_feature_batch(spatial_batch, args.device)
 
     outputs_embed_batch = inputs_embed_batch.clone().detach()
-    (
-        action_batch,
-        inputs_embed_batch,
-        target_locations,
-    ) = mask_tokens(
+    (action_batch, inputs_embed_batch, target_locations,) = mask_tokens(
         link_batch,
         inc_scene_batch,
         action_batch,
@@ -693,16 +689,16 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                 )
             )
 
-    if args.action_recognition:
-        freeze(tmp_model.roberta)
-        if hasattr(tmp_model, "lm_head"):
-            freeze(tmp_model.lm_head.dense)
-        if hasattr(tmp_model, "action_lm_head"):
-            freeze(tmp_model.action_lm_head.dense)
-        if hasattr(tmp_model, "lm_head"):
-            freeze(tmp_model.lm_head.layer_norm)
-        if hasattr(tmp_model, "action_lm_head"):
-            freeze(tmp_model.action_lm_head.layer_norm)
+    # if args.action_recognition:
+    #     freeze(tmp_model.roberta)
+    #     if hasattr(tmp_model, "lm_head"):
+    #         freeze(tmp_model.lm_head.dense)
+    #     if hasattr(tmp_model, "action_lm_head"):
+    #         freeze(tmp_model.action_lm_head.dense)
+    #     if hasattr(tmp_model, "lm_head"):
+    #         freeze(tmp_model.lm_head.layer_norm)
+    #     if hasattr(tmp_model, "action_lm_head"):
+    #         freeze(tmp_model.action_lm_head.layer_norm)
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
@@ -1109,7 +1105,6 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                     )
 
             epoch_len = len(train_dataloader) // int(args.num_train_epochs)
-
 
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
