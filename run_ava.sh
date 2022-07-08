@@ -15,6 +15,7 @@ pretrained_weights=/home/s222126678/Documents/lvu_trans/pretrained_models/pretra
 
 
 python -u src/run.py \
+    --do_wandb \
     --output_dir=outputs/${exp} \
     --model_type=roberta \
     --model_name_or_path=roberta-base \

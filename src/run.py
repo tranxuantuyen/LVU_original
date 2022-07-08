@@ -43,7 +43,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-
+import wandb
 from models import (
     WEIGHTS_NAME,
     AdamW,
@@ -996,7 +996,11 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                     scaled_loss.backward()
             else:
                 loss.backward()
-
+            wandb.log(
+                {
+                    "loss_batch": loss,
+                }
+            )
             tr_loss += loss.item()
             if "lm_action" in losses:
                 lm_action_loss += losses["lm_action"].mean().item()
@@ -1462,6 +1466,10 @@ def main():
         help="An optional input evaluation data file to evaluate the perplexity on (a text file).",
     )
     parser.add_argument(
+        "--do_wandb",
+        action="store_true",
+    )
+    parser.add_argument(
         "--line_by_line",
         action="store_true",
         help="Whether distinct lines of text in the dataset are to be handled as distinct sequences.",
@@ -1716,7 +1724,8 @@ def main():
     args.is_end_task = args.train_long_term or args.action_recognition
 
     args.all_feat_dims = [2304]
-
+    if args.do_wandb:
+        wandb.init(project="Modify LUV", name="Change LUV")
     if (
         args.model_type in ["bert", "roberta", "distilbert", "camembert"]
         and not args.mlm
@@ -1849,6 +1858,7 @@ def main():
 
         global_step, tr_loss = train(args, train_dataset, model)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
+    wandb.finish()
     if args.is_end_task and args.local_rank in [-1, 0]:
         evaluate(args, model)
 
