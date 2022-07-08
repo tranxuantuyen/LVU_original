@@ -115,6 +115,8 @@ class VideoDataset(Dataset):
         for video_name in self.videos.keys():
             v = self.videos[video_name]
             # for action recognition only, both train and test use 15 min only.
+            # gap = args.secs_per_example - 2 if evaluate else 1
+
             for center_sec in range(EVAL_START_SEC, EVAL_END_SEC):
                 if (
                     sum(
@@ -128,67 +130,31 @@ class VideoDataset(Dataset):
                     )
                     > 0
                 ):
-                    self.spans.append((video_name, center_sec, None))
-        if evaluate:
-            self.spans = self.spans * args.eval_sample_x
-
-        for video_name in self.videos.keys():
-
-            v = self.videos[video_name]
-            # complete spans
-            range_start = min(v.keys()) + self.secs_per_example - 1
-            range_end = max(v.keys()) + 1
-            gap = 60 if (self.evaluate and not args.is_end_task) else 1
-
-            for tail_sec in range(range_start, range_end, gap):
-                if (
-                    sum(
-                        [
-                            sec in v.keys()
-                            for sec in range(
-                                tail_sec + 1 - self.secs_per_example, tail_sec + 1
-                            )
-                        ]
-                    )
-                    > 0
-                ):
-
-                    self.spans.append((video_name, None, tail_sec))
+                    self.spans.append((video_name, center_sec))
+        # if evaluate:
+        #     self.spans = self.spans * args.eval_sample_x
 
         print(len(set([x[0] for x in self.spans])), "videos in spans in total")
         print(len(self.videos), "video data loaded in total")
 
     def __len__(self):
-        if self.evaluate:
-            return len(self.spans)
-        else:
-            return len(set([x[0] for x in self.spans])) * int(
-                self.args.num_train_epochs
-            )
+        return len(self.spans)
 
     def __getitem__(self, item):
-        if self.evaluate:
-            selected = [self.spans[item % len(self.spans)]]
-        else:
-            selected = [random.choice(self.spans)]
+        selected = [self.spans[item]]
 
         ret = []
         construct_func = self.construct_example
 
-        for video_name, center_start, tail_start in selected:
+        for (video_name, center_start) in selected:
             for _ in range(100):
-                one_ex = construct_func(
-                    video_name, center_start=center_start, tail_start=tail_start
-                )
+                one_ex = construct_func(video_name, center_start=center_start)
                 if one_ex is not None:
                     break
-                v = self.videos[video_name]
-                tail_start = random.choice(range(min(v.keys()), max(v.keys()) + 1))
-
             ret.append(one_ex + [video_name])
         return ret
 
-    def construct_example(self, video_name, center_start=None, tail_start=None):
+    def construct_example(self, video_name, center_start=None):
         def get_spatial_encoding(box, perturb=0.0):
             box = [float(x) for x in box.split(",")]
             if perturb > 0 and not self.evaluate:
@@ -229,9 +195,6 @@ class VideoDataset(Dataset):
                 else:
                     sec = center_start - (sec_shift + 1) // 2
                     auged_sec = center_start - (shift_idx + 1) // 2
-            if tail_start is not None:
-                sec = tail_start - sec_shift
-                auged_sec = tail_start - shift_idx
             if sec in video:
                 for box, (scene_id, link_id, actions) in video[sec].items():
 
@@ -251,15 +214,9 @@ class VideoDataset(Dataset):
         if len(ex_secs) == 0:
             return None
 
-        original_ex_secs = ex_secs
         assert (max(ex_secs) - min(ex_secs)) < args.secs_per_example
 
-        halfway = args.max_position_embeddings // 2
-
-        if tail_start is None:
-            tail_start = max(ex_secs)
-        if center_start is None:
-            center_start = (max(ex_secs) + min(ex_secs)) // 2
+        halfway = args.secs_per_example // 2
 
         increasing_pos_ids = [x - min(ex_secs) for x in ex_secs]
         decreasing_pos_ids = [max(ex_secs) - x for x in ex_secs]
@@ -478,10 +435,10 @@ def mask_tokens(
 
     out_masked_indices = masked_indices.clone().detach()
 
-    if args.action_recognition:
-        action_batch[
-            ~out_masked_indices[:, :, None].expand(-1, -1, args.num_action_classes)
-        ] = -100  # We only compute loss on masked tokens
+    # if args.action_recognition:
+    #     action_batch[
+    #         ~out_masked_indices[:, :, None].expand(-1, -1, args.num_action_classes)
+    #     ] = -100  # We only compute loss on masked tokens
 
     # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
     indices_replaced = (
@@ -658,36 +615,36 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
             )
 
     tmp_model = model.module if hasattr(model, "module") else model
-    if args.action_recognition:
-        logger.warn("Initializing final W/b")
-        state_dict = torch.load(
-            args.short_term_model_weights,
-            map_location="cpu",
-        )
-        tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
-            state_dict["model_state"]["head.projection.weight"]
-        )
-        tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
-            state_dict["model_state"]["head.projection.bias"]
-        )
+    # if args.action_recognition:
+    #     logger.warn("Initializing final W/b")
+    #     state_dict = torch.load(
+    #         args.short_term_model_weights,
+    #         map_location="cpu",
+    #     )
+    #     tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
+    #         state_dict["model_state"]["head.projection.weight"]
+    #     )
+    #     tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
+    #         state_dict["model_state"]["head.projection.bias"]
+    #     )
 
-        pretrained_state_dict = torch.load(
-            args.force_load_checkpoint, map_location="cpu"
-        )
+    #     pretrained_state_dict = torch.load(
+    #         args.force_load_checkpoint, map_location="cpu"
+    #     )
 
-        tmp_weight = pretrained_state_dict["action_lm_head.decoder.weight"]
-        if tmp_model.action_lm_head.decoder.weight.shape == tmp_weight.shape:
-            logger.warn("init pretrained weights")
-            tmp_model.action_lm_head.decoder.weight = nn.Parameter(tmp_weight)
-            tmp_bias = pretrained_state_dict["action_lm_head.decoder.bias"]
-            tmp_model.action_lm_head.bias = nn.Parameter(tmp_bias)
-            tmp_model.action_lm_head.decoder.bias = tmp_model.action_lm_head.bias
-        else:
-            logger.warn(
-                "Not init pretrained weights {} {} not match".format(
-                    tmp_model.action_lm_head.decoder.weight.shape, tmp_weight.shape
-                )
-            )
+    #     tmp_weight = pretrained_state_dict["action_lm_head.decoder.weight"]
+    #     if tmp_model.action_lm_head.decoder.weight.shape == tmp_weight.shape:
+    #         logger.warn("init pretrained weights")
+    #         tmp_model.action_lm_head.decoder.weight = nn.Parameter(tmp_weight)
+    #         tmp_bias = pretrained_state_dict["action_lm_head.decoder.bias"]
+    #         tmp_model.action_lm_head.bias = nn.Parameter(tmp_bias)
+    #         tmp_model.action_lm_head.decoder.bias = tmp_model.action_lm_head.bias
+    #     else:
+    #         logger.warn(
+    #             "Not init pretrained weights {} {} not match".format(
+    #                 tmp_model.action_lm_head.decoder.weight.shape, tmp_weight.shape
+    #             )
+    #         )
 
     # if args.action_recognition:
     #     freeze(tmp_model.roberta)
@@ -702,7 +659,7 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
-
+    model.init_weights()
     rbt_no_d = []
     final_no_d = []
     rbt_d = []
@@ -1158,7 +1115,7 @@ def evaluate_action_recognition(bert_all_preds, args):
 
     logger.info("set all_preds to bert")
     used_count = 0
-    all_preds[:, :] = 0.0
+    # all_preds[:, :] = 0.0
     for i in range(all_preds.shape[0]):
         video_idx = int(all_metadata[i][0])
         sec = int(all_metadata[i][1])
@@ -1635,7 +1592,7 @@ def main():
     )
 
     parser.add_argument(
-        "--secs_per_example", type=int, default=60, help="Number of secs per example."
+        "--secs_per_example", type=int, default=10, help="Number of secs per example."
     )
     parser.add_argument(
         "--get_mc_states_name", type=str, default="binary_task", help=""
@@ -1660,7 +1617,7 @@ def main():
         "--num_workers", type=int, default=16, help="Number of DataLoader workers."
     )
     parser.add_argument(
-        "--num_workers_eval", type=int, default=2, help="Number of DataLoader workers."
+        "--num_workers_eval", type=int, default=4, help="Number of DataLoader workers."
     )
     parser.add_argument(
         "--force_load_checkpoint",
