@@ -1,30 +1,3 @@
-# coding=utf-8
-
-# Based on:
-# HuggingFace Transformers
-# See https://github.com/huggingface/transformers/LICENSE for details.
-#################################################
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-Fine-tuning the library models for language modeling on a text file (GPT, GPT-2, BERT, RoBERTa).
-GPT and GPT-2 are fine-tuned using a causal language modeling (CLM) loss while BERT and RoBERTa are fine-tuned
-using a masked language modeling (MLM) loss.
-"""
-
-
 import argparse
 import glob
 import logging
@@ -291,88 +264,6 @@ def set_seed(args):
         torch.cuda.manual_seed_all(seed)
 
 
-def _sorted_checkpoints(
-    args, checkpoint_prefix="checkpoint", use_mtime=False
-) -> List[str]:
-    ordering_and_checkpoint_path = []
-
-    glob_checkpoints = glob.glob(
-        os.path.join(args.output_dir, "{}-*".format(checkpoint_prefix))
-    )
-
-    for path in glob_checkpoints:
-        if use_mtime:
-            ordering_and_checkpoint_path.append((os.path.getmtime(path), path))
-        else:
-            regex_match = re.match(".*{}-([0-9]+)".format(checkpoint_prefix), path)
-            if regex_match and regex_match.groups():
-                ordering_and_checkpoint_path.append(
-                    (int(regex_match.groups()[0]), path)
-                )
-
-    checkpoints_sorted = sorted(ordering_and_checkpoint_path)
-    checkpoints_sorted = [checkpoint[1] for checkpoint in checkpoints_sorted]
-    return checkpoints_sorted
-
-
-def _rotate_checkpoints(args, checkpoint_prefix="checkpoint", use_mtime=False) -> None:
-    if not args.save_total_limit:
-        return
-    # if args.save_total_limit <= 0:
-    #     return
-
-    # Check if we should delete older checkpoint(s)
-    checkpoints_sorted = _sorted_checkpoints(args, checkpoint_prefix, use_mtime)
-    if len(checkpoints_sorted) <= args.save_total_limit:
-        return
-
-    number_of_checkpoints_to_delete = max(
-        0, len(checkpoints_sorted) - args.save_total_limit
-    )
-    checkpoints_to_be_deleted = checkpoints_sorted[:number_of_checkpoints_to_delete]
-    for checkpoint in checkpoints_to_be_deleted:
-        logger.info(
-            "Deleting older checkpoint [{}] due to args.save_total_limit".format(
-                checkpoint
-            )
-        )
-        shutil.rmtree(checkpoint)
-
-
-def get_mask_indices(x_batch, masked_indices, features=None):
-    use_pos = None
-    if features is not None:
-        use_pos = features.sum(axis=2) != 0
-
-    for i in range(x_batch.shape[0]):
-        if use_pos is not None:
-            cur_x = x_batch[i][use_pos[i]]
-        else:
-            cur_x = x_batch[i]
-
-        x_ids = set(cur_x.tolist()) - set([1, 2, 3])  # remove padding, start, and end
-        assert 0 not in x_ids
-
-        if len(x_ids) == 0:
-            if features is not None and features.shape[-1] != 1024:
-                logger.info("warning: no masked elements in example")
-            continue
-
-        group_mask = {}
-        while sum(group_mask.values()) < 1:
-            group_mask = {
-                x_id: int(np.random.choice([0, 1], p=[0.85, 0.15])) for x_id in x_ids
-            }
-
-        for x_id in x_ids:
-            if group_mask[x_id] == 1:
-                assert x_id > 3
-                masked_indices[i, x_batch[i] == x_id] = 1
-        assert masked_indices[i].sum() > 0
-
-    return masked_indices
-
-
 def shared_collate(all_examples: List[torch.Tensor]):
     if len(all_examples[0]) == 1:
         all_examples = [x[0] for x in all_examples]
@@ -414,7 +305,6 @@ def prepare_model_input(
     spatial_batch = pad_feature_batch(spatial_batch, args.device)
 
     outputs_embed_batch = inputs_embed_batch.clone().detach()
-
 
     if action_batch is not None:
         action_batch = action_batch.to(args.device)
@@ -489,67 +379,7 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
         pin_memory=True,
     )
 
-    if args.max_steps > 0:
-        t_total = args.max_steps
-        args.num_train_epochs = (
-            args.max_steps
-            // (len(train_dataloader) // args.gradient_accumulation_steps)
-            + 1
-        )
-    else:
-        if args.is_end_task:
-            t_total = len(train_dataloader) // args.gradient_accumulation_steps
-        else:
-            t_total = (
-                len(train_dataloader)
-                // args.gradient_accumulation_steps
-                * args.num_train_epochs
-            )
-
-    tmp_model = model.module if hasattr(model, "module") else model
-    # if args.action_recognition:
-    #     logger.warn("Initializing final W/b")
-    #     state_dict = torch.load(
-    #         args.short_term_model_weights,
-    #         map_location="cpu",
-    #     )
-    #     tmp_model.action_lm_head.decoder_feat.weight = nn.Parameter(
-    #         state_dict["model_state"]["head.projection.weight"]
-    #     )
-    #     tmp_model.action_lm_head.decoder_feat.bias = nn.Parameter(
-    #         state_dict["model_state"]["head.projection.bias"]
-    #     )
-
-    #     pretrained_state_dict = torch.load(
-    #         args.force_load_checkpoint, map_location="cpu"
-    #     )
-
-    #     tmp_weight = pretrained_state_dict["action_lm_head.decoder.weight"]
-    #     if tmp_model.action_lm_head.decoder.weight.shape == tmp_weight.shape:
-    #         logger.warn("init pretrained weights")
-    #         tmp_model.action_lm_head.decoder.weight = nn.Parameter(tmp_weight)
-    #         tmp_bias = pretrained_state_dict["action_lm_head.decoder.bias"]
-    #         tmp_model.action_lm_head.bias = nn.Parameter(tmp_bias)
-    #         tmp_model.action_lm_head.decoder.bias = tmp_model.action_lm_head.bias
-    #     else:
-    #         logger.warn(
-    #             "Not init pretrained weights {} {} not match".format(
-    #                 tmp_model.action_lm_head.decoder.weight.shape, tmp_weight.shape
-    #             )
-    #         )
-
-    # if args.action_recognition:
-    #     freeze(tmp_model.roberta)
-    #     if hasattr(tmp_model, "lm_head"):
-    #         freeze(tmp_model.lm_head.dense)
-    #     if hasattr(tmp_model, "action_lm_head"):
-    #         freeze(tmp_model.action_lm_head.dense)
-    #     if hasattr(tmp_model, "lm_head"):
-    #         freeze(tmp_model.lm_head.layer_norm)
-    #     if hasattr(tmp_model, "action_lm_head"):
-    #         freeze(tmp_model.action_lm_head.layer_norm)
-
-    # Prepare optimizer and schedule (linear warmup and decay)
+    t_total = len(train_dataloader) // args.gradient_accumulation_steps
     no_decay = ["bias", "LayerNorm.weight"]
     model.init_weights()
     rbt_no_d = []
@@ -595,63 +425,6 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
     )
 
     # Check if saved optimizer or scheduler states exist
-    if (
-        args.model_name_or_path
-        and os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt"))
-        and os.path.isfile(os.path.join(args.model_name_or_path, "scheduler.pt"))
-    ):
-        # Load in optimizer and scheduler states
-        optimizer.load_state_dict(
-            torch.load(os.path.join(args.model_name_or_path, "optimizer.pt"))
-        )
-        scheduler.load_state_dict(
-            torch.load(os.path.join(args.model_name_or_path, "scheduler.pt"))
-        )
-        logger.info(
-            "loading optimizer and scheduler from {}".format(args.model_name_or_path)
-        )
-
-    if (
-        args.force_load_checkpoint_opt
-        and os.path.isfile(os.path.join(args.force_load_checkpoint_opt, "optimizer.pt"))
-        and os.path.isfile(os.path.join(args.force_load_checkpoint_opt, "scheduler.pt"))
-    ):
-        # Load in optimizer and scheduler states
-        optimizer.load_state_dict(
-            torch.load(os.path.join(args.force_load_checkpoint_opt, "optimizer.pt"))
-        )
-        scheduler.load_state_dict(
-            torch.load(os.path.join(args.force_load_checkpoint_opt, "scheduler.pt"))
-        )
-        logger.info(
-            "loading optimizer and scheduler from {}".format(
-                args.force_load_checkpoint_opt
-            )
-        )
-
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use fp16 training."
-            )
-        model, optimizer = amp.initialize(
-            model, optimizer, opt_level=args.fp16_opt_level
-        )
-
-    # multi-gpu training (should be after apex fp16 initialization)
-    if args.n_gpu > 1:
-        model = torch.nn.DataParallel(model)
-
-    # Distributed training (should be after apex fp16 initialization)
-    if args.local_rank != -1:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[args.local_rank],
-            output_device=args.local_rank,
-            find_unused_parameters=True,
-        )
 
     # Train!
     logger.info("***** Running training *****")
@@ -671,67 +444,9 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
 
     global_step = 0
     epochs_trained = 0
-    steps_trained_in_current_epoch = 0
-    steps_remain_in_current_epoch = -1
     # Check if continuing training from a checkpoint
-    if args.model_name_or_path and os.path.exists(args.model_name_or_path):
-        try:
-            # set global_step to gobal_step of last saved checkpoint from model path
-            checkpoint_suffix = args.model_name_or_path.split("-")[-1].split("/")[0]
-            global_step = int(checkpoint_suffix)
-            epochs_trained = global_step // (
-                len(train_dataloader) // args.gradient_accumulation_steps
-            )
-            steps_trained_in_current_epoch = global_step % (
-                len(train_dataloader) // args.gradient_accumulation_steps
-            )
-
-            logger.info(
-                "  Continuing training from checkpoint, will skip to saved global_step"
-            )
-            logger.info("  Continuing training from epoch %d", epochs_trained)
-            logger.info("  Continuing training from global step %d", global_step)
-            logger.info(
-                "  Will skip the first %d steps in the first epoch",
-                steps_trained_in_current_epoch,
-            )
-        except ValueError:
-            logger.info("  Starting fine-tuning.")
-
-    if args.force_load_checkpoint_opt:
-        try:
-            # set global_step to gobal_step of last saved checkpoint from model path
-            checkpoint_suffix = args.force_load_checkpoint_opt.split("-")[-1].split(
-                "/"
-            )[0]
-            global_step = int(checkpoint_suffix)
-            epochs_trained = global_step // (
-                len(train_dataloader) // args.gradient_accumulation_steps
-            )
-            steps_trained_in_current_epoch = global_step % (
-                len(train_dataloader) // args.gradient_accumulation_steps
-            )
-            steps_remain_in_current_epoch = (
-                len(train_dataloader) // args.gradient_accumulation_steps
-            ) - steps_trained_in_current_epoch
-            logger.info(
-                "  Continuing training from checkpoint, will skip to saved global_step"
-            )
-            logger.info("  Continuing training from epoch %d", epochs_trained)
-            logger.info("  Continuing training from global step %d", global_step)
-            # logger.info("  Will skip the first %d steps in the first epoch", steps_trained_in_current_epoch)
-            logger.info(
-                "  Will train only %d steps in the first epoch",
-                steps_remain_in_current_epoch,
-            )
-        except ValueError:
-            logger.info("  Starting fine-tuning.")
-
-    tr_loss, logging_loss = 0.0, 0.0
-    lm_action_loss, same_movie_loss = 0.0, 0.0
-
     model = model.to(args.device)
-
+    tr_loss = 0.0
     model.zero_grad()
     train_iterator = trange(
         epochs_trained,
@@ -743,17 +458,7 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
 
     logger.info(model)
 
-    is_first_epoch = True
     for cur_epoch in train_iterator:
-        if steps_remain_in_current_epoch > -1:
-            tr_d = train_dataloader.dataset
-            if is_first_epoch:
-                original_dataset_len = len(tr_d)
-                tr_d.force_len = steps_remain_in_current_epoch * args.train_batch_size
-                is_first_epoch = False
-            else:
-                tr_d.force_len = original_dataset_len
-
         epoch_iterator = tqdm(
             train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0]
         )
@@ -830,141 +535,23 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
             if step == 0:
                 logger.info(losses)
 
-            if args.n_gpu > 1:
-                loss = sum(
-                    [loss.mean() for loss in losses.values()]
-                )  # mean() to average on multi-gpu parallel training
-            else:
-                loss = sum(losses.values())
+            loss = sum(losses.values())
 
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
-
-            if args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
-            wandb.log(
-                {
-                    "loss_batch": loss,
-                }
-            )
+            loss.backward()
+            if args.do_wandb:
+                wandb.log(
+                    {
+                        "loss_batch": loss,
+                    }
+                )
             tr_loss += loss.item()
-            if "lm_action" in losses:
-                lm_action_loss += losses["lm_action"].mean().item()
-            if "same_movie" in losses:
-                same_movie_loss += losses["same_movie"].mean().item()
-
             if (step + 1) % args.gradient_accumulation_steps == 0:
-                if args.fp16:
-                    torch.nn.utils.clip_grad_norm_(
-                        amp.master_params(optimizer), args.max_grad_norm
-                    )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), args.max_grad_norm
-                    )
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
 
-                if len(args.eval_epochs) == 0:
-                    do_eval = (
-                        step == len(train_dataloader) - 1 and args.is_end_task
-                    ) or (
-                        args.local_rank in [-1, 0]
-                        and args.logging_steps > 0
-                        and global_step % args.logging_steps == 0
-                    )
-                else:
-                    epoch_len = len(train_dataloader) // int(args.num_train_epochs)
-                    if (step + 1) % epoch_len == 0:
-                        do_eval = (step + 1) in [
-                            int(x) * epoch_len
-                            for x in args.eval_epochs.strip().split(",")
-                        ]
-                    else:
-                        do_eval = False
-                if do_eval:
-                    # Log metrics
-                    if (
-                        args.local_rank == -1
-                        and args.evaluate_during_training
-                        and not args.is_end_task
-                    ):  # Only evaluate when single GPU otherwise metrics may not average well
-                        results = evaluate(args, model)
-
-                    logger.info(("lr", scheduler.get_lr()[0], global_step))
-                    logger.info(
-                        (
-                            "training loss",
-                            (tr_loss - logging_loss) / args.logging_steps,
-                            global_step,
-                        )
-                    )
-
-                    logger.info(
-                        (
-                            "same_movie_loss",
-                            same_movie_loss / args.logging_steps,
-                        )
-                    )
-                    logger.info(
-                        (
-                            "lm_action_loss",
-                            lm_action_loss / args.logging_steps,
-                        )
-                    )
-                    same_movie_loss = 0.0
-                    lm_action_loss = 0.0
-
-                    logging_loss = tr_loss
-
-                if args.save_steps == -1:
-                    do_save = do_eval
-                else:
-                    do_save = (
-                        (args.local_rank in [-1, 0])
-                        and (args.save_steps > 0)
-                        and (global_step % args.save_steps == 0)
-                    )
-                if do_save:
-                    checkpoint_prefix = "checkpoint"
-                    # Save model checkpoint
-                    output_dir = os.path.join(
-                        args.output_dir, "{}-{}".format(checkpoint_prefix, global_step)
-                    )
-                    os.makedirs(output_dir, exist_ok=True)
-                    model_to_save = (
-                        model.module if hasattr(model, "module") else model
-                    )  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)
-
-                    torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                    logger.info("Saving model checkpoint to %s", output_dir)
-
-                    _rotate_checkpoints(args, checkpoint_prefix)
-
-                    torch.save(
-                        optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt")
-                    )
-                    torch.save(
-                        scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt")
-                    )
-                    logger.info(
-                        "Saving optimizer and scheduler states to %s", output_dir
-                    )
-
-            epoch_len = len(train_dataloader) // int(args.num_train_epochs)
-
-            if args.max_steps > 0 and global_step > args.max_steps:
-                epoch_iterator.close()
-                break
-        if args.max_steps > 0 and global_step > args.max_steps:
-            train_iterator.close()
-            break
         print("done one epoch")
 
     return global_step, tr_loss / global_step
