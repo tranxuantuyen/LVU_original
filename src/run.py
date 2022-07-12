@@ -373,105 +373,6 @@ def get_mask_indices(x_batch, masked_indices, features=None):
     return masked_indices
 
 
-def perform_masking(masked_indices, inputs_embed_batch, contents):
-    mask_dim = inputs_embed_batch.shape[2]
-
-    # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-    indices_replaced = (
-        torch.bernoulli(torch.full(masked_indices.shape, 0.8)).bool() & masked_indices
-    )
-
-    feat_mask = indices_replaced.view(
-        (indices_replaced.shape[0], indices_replaced.shape[1], 1)
-    ).expand(-1, -1, mask_dim)
-
-    # inputs_embed_batch[feat_mask] = -10
-
-    # 10% of the time, we replace masked input tokens with random word
-    indices_random = (
-        torch.bernoulli(torch.full(masked_indices.shape, 0.5)).bool()
-        & masked_indices
-        & ~indices_replaced
-    )
-
-    not_replaced = inputs_embed_batch[(~indices_replaced & contents)].reshape(
-        (-1, mask_dim)
-    )
-
-    num_to_sample = int(indices_random.sum())
-    num_features = not_replaced.shape[0]
-    if num_to_sample > 0 and num_features > 0:
-        random_indices = np.random.choice(num_features, num_to_sample)
-        inputs_embed_batch[
-            indices_random[:, :, None].repeat(1, 1, mask_dim)
-        ] = not_replaced[random_indices].reshape((-1,))
-    return inputs_embed_batch
-
-
-def mask_tokens(
-    link_batch: torch.Tensor,
-    inc_scene_batch: torch.Tensor,
-    action_batch: torch.Tensor,
-    inputs_embed_batch: torch.Tensor,
-    center_pos_batch: torch.Tensor,
-    args,
-    is_eval=False,
-    dec_pos_batch=None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-
-    ################################################################################
-    masked_indices = torch.zeros(link_batch.shape, dtype=torch.int64)
-    scene_masked_indices = None
-
-    masked_indices = get_mask_indices(link_batch, masked_indices, inputs_embed_batch)
-
-    masked_indices = masked_indices.bool()
-
-    ################################################################################
-    ################################################################################
-    contents = (
-        (center_pos_batch != 1) & (center_pos_batch != 2) & (center_pos_batch != 3)
-    )
-
-    out_masked_indices = masked_indices.clone().detach()
-
-    # if args.action_recognition:
-    #     action_batch[
-    #         ~out_masked_indices[:, :, None].expand(-1, -1, args.num_action_classes)
-    #     ] = -100  # We only compute loss on masked tokens
-
-    # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-    indices_replaced = (
-        torch.bernoulli(torch.full(link_batch.shape, 0.8)).bool() & masked_indices
-    )
-
-    if args.mask_sep:
-        if not args.mask_sep_no_mask:
-
-            start = 0
-            for cur_feat_dim in args.all_feat_dims:
-                if cur_feat_dim == args.action_feat_dim:
-                    cur_masked_indices = masked_indices
-                else:
-                    assert False
-
-                inputs_embed_batch[
-                    :, :, start : start + cur_feat_dim
-                ] = perform_masking(
-                    cur_masked_indices,
-                    inputs_embed_batch[:, :, start : start + cur_feat_dim],
-                    contents,
-                )
-
-                start += cur_feat_dim
-
-    inputs_embed_batch[:, :, : args.action_feat_dim] = perform_masking(
-        masked_indices, inputs_embed_batch[:, :, : args.action_feat_dim], contents
-    )
-    # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-    return (action_batch, inputs_embed_batch, masked_indices)
-
-
 def shared_collate(all_examples: List[torch.Tensor]):
     if len(all_examples[0]) == 1:
         all_examples = [x[0] for x in all_examples]
@@ -513,21 +414,12 @@ def prepare_model_input(
     spatial_batch = pad_feature_batch(spatial_batch, args.device)
 
     outputs_embed_batch = inputs_embed_batch.clone().detach()
-    (action_batch, inputs_embed_batch, target_locations,) = mask_tokens(
-        link_batch,
-        inc_scene_batch,
-        action_batch,
-        inputs_embed_batch,
-        center_pos_batch,
-        args,
-        is_eval=is_eval,
-        dec_pos_batch=dec_pos_batch,
-    )
+
 
     if action_batch is not None:
         action_batch = action_batch.to(args.device)
 
-    target_locations = target_locations.to(args.device)
+    target_locations = None
 
     link_batch = link_batch.to(args.device)
 
@@ -926,7 +818,7 @@ def train(args, train_dataset, model: PreTrainedModel) -> Tuple[int, float]:
                 inputs_embeds=inputs_embed_batch,
                 outputs_embeds=outputs_embed_batch,
                 spatial_codes=spatial_batch,
-                target_locations=target_locations,
+                target_locations=None,
                 secs=sec_batch,
                 boxes=box_batch,
                 args=args,

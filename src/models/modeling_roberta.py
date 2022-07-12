@@ -336,7 +336,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
         all_loss = {}
         all_outputs = {}
 
-        ignore = ~target_locations
+        # ignore = ~target_locations
 
         prediction_scores = self.action_lm_head(
             sequence_output, outputs_embeds[:, :, :2304]
