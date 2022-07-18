@@ -18,7 +18,6 @@ python -u src/run.py \
     --do_wandb \
     --output_dir=outputs/${exp} \
     --model_type=roberta \
-    --model_name_or_path=roberta-base \
     --do_train \
     --do_eval \
     --train_data_file=$TRAIN_FILE \
@@ -45,7 +44,6 @@ python -u src/run.py \
     --train_long_term_dropout \
     --per_gpu_eval_batch_size 32 \
     --short_term_model_weights ${short_term_model_weights} \
-    --force_load_checkpoint ${pretrained_weights} \
     >> logs/${exp}.log 2>&1
 
 

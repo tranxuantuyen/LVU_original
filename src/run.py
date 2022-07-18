@@ -336,15 +336,6 @@ def prepare_model_input(
         target_locations,
     )
 
-
-def freeze(mod):
-    count = 0
-    for p in mod.parameters():
-        p.requires_grad = False
-        count += 1
-    logger.info("freeze {} ({} params)".format(mod, count))
-
-
 def pad_feature_batch(feature_batch, device):
     batch_size = len(feature_batch)
     max_len = max([len(x) for x in feature_batch])
@@ -633,10 +624,8 @@ def softmax(x):
 def evaluate(args, model: PreTrainedModel, prefix="") -> Dict:
 
     logger.info(model)
-
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
-
     eval_dataset = VideoDataset(args, evaluate=True)
 
     if args.local_rank in [-1, 0]:
@@ -677,7 +666,6 @@ def evaluate(args, model: PreTrainedModel, prefix="") -> Dict:
     model.eval()
 
     all_preds = []
-    all_states = []
     for (
         link_batch,
         inc_pos_batch,
@@ -744,99 +732,26 @@ def evaluate(args, model: PreTrainedModel, prefix="") -> Dict:
                 args=args,
             )
             losses = outputs[0]
-            if args.action_recognition:
-                all_preds.append(
-                    (
-                        outputs[1]["pred"].cpu(),
-                        video_name_batch,
-                        sec_batch,
-                        box_batch,
-                        (action_batch[:, :, 0] != -100).cpu(),
-                    )
+            all_preds.append(
+                (
+                    outputs[1]["pred"].cpu(),
+                    video_name_batch,
+                    sec_batch,
+                    box_batch,
+                    (action_batch[:, :, 0] != -100).cpu(),
                 )
-
-            if args.train_long_term:
-                lt_pred = outputs[1]["long_term_logits"].cpu()
-                lt_labels = long_term_batch[:, 1]
-
-                if args.num_long_term_classes == -1:
-                    lt_pred = lt_pred[:, 0]
-
-                all_preds.append((video_name_batch, lt_pred, lt_labels))
-
-                if args.num_long_term_classes > 0:
-                    lt_pred = outputs[1]["long_term_logits"].argmax(dim=1).cpu()
-                    lt_labels = long_term_batch[:, 1]
-                    long_term_top1 += (lt_pred == lt_labels).sum()
-                    long_term_count += lt_labels.shape[0]
-
-            if args.mask_sep:
-                eval_loss += losses["lm_action"].mean().item()
-                all_eval_loss += sum([loss.mean() for loss in losses.values()]).item()
-            else:
-                eval_loss += sum([loss.mean() for loss in losses.values()]).item()
-
+            )
+            eval_loss += sum([loss.mean() for loss in losses.values()]).item()
             eval_example_count += inc_pos_batch.shape[0]
-
         nb_eval_steps += 1
 
     mean_ap = 0.0
-    if args.action_recognition:
-        start_eval = time.time()
-        mean_ap = evaluate_action_recognition(all_preds, args)
-        logger.info("eval done in {} secs".format(time.time() - start_eval))
+    start_eval = time.time()
+    mean_ap = evaluate_action_recognition(all_preds, args)
+    logger.info("eval done in {} secs".format(time.time() - start_eval))
 
     clip_mse = []
     split_result = {}
-    if args.train_long_term:
-        pred_agg = {}
-        video_label = {}
-
-        for video_name_batch, pred_batch, label_batch in all_preds:
-            for i in range(len(video_name_batch)):
-                v_name = video_name_batch[i]
-                if v_name not in pred_agg:
-                    if args.num_long_term_classes > 0:
-                        pred_agg[v_name] = softmax(pred_batch[i])
-                    else:
-                        pred_agg[v_name] = [pred_batch[i]]
-                    video_label[v_name] = label_batch[i]
-                else:
-                    if args.num_long_term_classes > 0:
-                        pred_agg[v_name] += softmax(pred_batch[i])
-                    else:
-                        pred_agg[v_name].append(pred_batch[i])
-
-                    assert video_label[v_name] == label_batch[i]
-
-                if args.num_long_term_classes == -1:
-                    clip_mse.append((pred_batch[i] - label_batch[i]) ** 2.0)
-
-        for split in ["val", "test"] if args.three_split else ["val"]:
-            agg_sm_correct, agg_count = 0.0, 0.0
-            mse = []
-
-            for v_name in pred_agg.keys():
-                if args.three_split and split == "val":
-                    if v_name not in eval_dataset.val_set:
-                        continue
-
-                if args.three_split and split == "test":
-                    if v_name not in eval_dataset.test_set:
-                        continue
-
-                if args.num_long_term_classes > 0:
-                    if pred_agg[v_name].argmax() == video_label[v_name]:
-                        agg_sm_correct += 1
-                else:
-                    mse.append((np.mean(pred_agg[v_name]) - video_label[v_name]) ** 2.0)
-                agg_count += 1
-            if args.num_long_term_classes > 0:
-                acc = 100.0 * agg_sm_correct / agg_count
-                split_result[split] = f"{acc} {agg_sm_correct} {agg_count}"
-            else:
-                split_result[split] = f"{np.mean(mse)} {len(mse)}"
-
     eval_loss = eval_loss / nb_eval_steps
     all_eval_loss = all_eval_loss / nb_eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
@@ -1175,15 +1090,6 @@ def main():
             "Cannot do evaluation without an evaluation data file. Either supply a file to --eval_data_file "
             "or remove the --do_eval argument."
         )
-    if args.should_continue:
-        sorted_checkpoints = _sorted_checkpoints(args)
-        if len(sorted_checkpoints) == 0:
-            raise ValueError(
-                "Used --should_continue but no checkpoint was found in --output_dir."
-            )
-        else:
-            args.model_name_or_path = sorted_checkpoints[-1]
-
     if (
         os.path.exists(args.output_dir)
         and os.listdir(args.output_dir)
@@ -1226,35 +1132,12 @@ def main():
 
     # Set seed
     set_seed(args)
+    config_class = RobertaConfig
+    config = config_class()
 
-    # Load pretrained model and tokenizer
-    if args.local_rank not in [-1, 0]:
-        torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training download model & vocab
-
-    config_class, model_class = MODEL_CLASSES[args.model_type]
-
-    if args.config_name:
-        config = config_class.from_pretrained(
-            args.config_name, cache_dir=args.cache_dir
-        )
-    elif args.model_name_or_path:
-        config = config_class.from_pretrained(
-            args.model_name_or_path, cache_dir=args.cache_dir
-        )
-    else:
-        config = config_class()
-
-    if args.model_name_or_path:
-        model = model_class.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            cache_dir=args.cache_dir,
-            args=args,
-        )
-    else:
-        logger.info("Training new model from scratch")
-        model = model_class(config=config)
+    model_class = RobertaForMaskedLM
+    logger.info("Training new model from scratch")
+    model = model_class(config=config, args=args)
     model.to(args.device)
 
     if args.local_rank == 0:
